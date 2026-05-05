@@ -1,0 +1,16 @@
+hosts.yml
+vars.local.yml
+*.local.yml
+*.retry
+
+.env
+.env.*
+.agents/
+.codex/
+
+*.log
+*.pem
+*.key
+id_*
+vault-password*
+.vault_pass*

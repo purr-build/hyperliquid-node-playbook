@@ -1,0 +1,31 @@
+- name: Copy pruner script 
+  become_user: "{{ node_user }}"
+  become: true
+  when: pruner.enabled
+  copy:
+    src: files/pruner.sh
+    dest: /home/{{ node_user }}/pruner.sh
+
+- name: Ensure pruner is executable
+  when: pruner.enabled
+  ansible.builtin.file:
+    path: "/home/{{ node_user }}/pruner.sh"
+    mode: "0755"
+
+- name: Install prune job in {{ node_user }}'s crontab
+  when: pruner.enabled
+  ansible.builtin.cron:
+    name: "Prune old node data"
+    user: "{{ node_user }}"
+    minute:  "{{ pruner.cron_schedule.split()[0] }}"
+    hour:    "{{ pruner.cron_schedule.split()[1] }}"
+    day:     "{{ pruner.cron_schedule.split()[2] }}"
+    month:   "{{ pruner.cron_schedule.split()[3] }}"
+    weekday: "{{ pruner.cron_schedule.split()[4] }}"
+    job: >
+      /home/{{ node_user }}/pruner.sh
+      --path {{ pruner.data_path | quote }}
+      --retain-hours {{ pruner.retain_hours }}
+      {% for d in pruner.excludes|default([]) -%}
+      --exclude {{ d | quote }}
+      {%- endfor %} >/dev/null 2>&1

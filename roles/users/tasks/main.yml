@@ -1,0 +1,6 @@
+- name: Create user to run the node binary
+  ansible.builtin.user:
+    name: "{{ node_user}}"
+    comment: User to run the Hyperliquid Node
+    system: yes
+    create_home: yes

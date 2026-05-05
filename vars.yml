@@ -1,0 +1,62 @@
+node_user: hyperliquid
+
+chain: Mainnet # Options: Mainnet, Testnet
+
+testnet_visor_binary_url: https://binaries.hyperliquid-testnet.xyz/Testnet/hl-visor
+mainnet_visor_binary_url: https://binaries.hyperliquid.xyz/Mainnet/hl-visor
+pub_key_url: https://raw.githubusercontent.com/hyperliquid-dex/node/refs/heads/main/pub_key.asc
+mainnet_signature_url: https://binaries.hyperliquid.xyz/Mainnet/hl-visor.asc
+testnet_signature_url: https://binaries.hyperliquid-testnet.xyz/Testnet/hl-visor.asc
+
+gossip_config:
+  download_peers: true # get list of recent active peers from HL API. overrides 'ip' list below if true
+  try_new_peers: true
+  ip: []
+
+visor:
+  exec_start: |
+    /home/{{node_user}}/hl-visor run-non-validator --write-fills --write-hip3-oracle-updates --write-misc-events --write-system-and-core-writer-actions
+  restart_sec: 5
+
+pruner:
+  data_path: /home/{{ node_user }}/hl/data
+  enabled: true
+  cron_schedule: "0 * * * *"
+  retain_hours: 48
+
+edge_sync:
+  enabled: false
+  targets: []
+  lock_path: /tmp/hl-edge-sync.lock
+  script_path: /usr/local/bin/hl-edge-sync.sh
+  service_name: hl-edge-sync
+  sync_items:
+    - name: node_fills
+      type: directory
+      source: /home/{{ node_user }}/hl/data/node_fills/
+      destination: /srv/public_data/node_fills/
+      delete: true
+    - name: periodic_abci_states_today
+      type: latest_by_name
+      source: /home/{{ node_user }}/hl/data/periodic_abci_states
+      destination: /srv/public_data/periodic_abci_states
+      date_subdir: true
+      pattern: "*.rmp"
+      delete: true
+    - name: hip3_oracle_updates
+      type: directory
+      source: /home/{{ node_user }}/hl/data/hip3_oracle_updates/hourly
+      destination: /srv/public_data/hip3_oracle_updates
+      date_subdir: true
+      delete: true
+    - name: system_and_core_writer_actions
+      type: directory
+      source: /home/{{ node_user }}/hl/data/system_and_core_writer_actions/hourly
+      destination: /srv/public_data/system_and_core_writer_actions
+      date_subdir: true
+      delete: true
+  timer_on_boot_sec: 2min
+  timer_on_unit_active_sec: 5min
+  timer_accuracy_sec: 30s
+  timeout_start_sec: 30min
+  run_on_deploy: false

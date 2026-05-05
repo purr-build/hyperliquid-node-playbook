@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Hyperliquid edge sync periodically
+
+[Timer]
+OnBootSec={{ edge_sync.timer_on_boot_sec }}
+OnUnitActiveSec={{ edge_sync.timer_on_unit_active_sec }}
+AccuracySec={{ edge_sync.timer_accuracy_sec }}
+Persistent=true
+Unit={{ edge_sync.service_name }}.service
+
+[Install]
+WantedBy=timers.target

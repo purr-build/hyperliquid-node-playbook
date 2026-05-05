@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync Hyperliquid public data to edge mirror
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart={{ edge_sync.script_path }}
+TimeoutStartSec={{ edge_sync.timeout_start_sec }}

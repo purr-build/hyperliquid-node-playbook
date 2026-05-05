@@ -1,0 +1,13 @@
+[Unit]
+Description=Hyperliquid node visor Service
+After=network.target
+
+[Service]
+Type=simple
+User={{ node_user }}
+Group={{ node_user }}
+WorkingDirectory=/home/{{ node_user }}
+ExecStart={{ visor.exec_start }}
+Restart=on-failure
+RestartSec={{ visor.restart_sec }}
+

@@ -1,0 +1,14 @@
+---
+- hosts: all
+  vars_files:
+    - ../vars.yml
+  pre_tasks:
+    - name: Load local variable overrides
+      ansible.builtin.include_vars: "{{ item }}"
+      with_first_found:
+        - files:
+            - "{{ playbook_dir }}/../vars.local.yml"
+          skip: true
+  roles:
+    - ../roles/base 
+    - geerlingguy.docker

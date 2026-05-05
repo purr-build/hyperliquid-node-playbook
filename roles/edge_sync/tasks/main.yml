@@ -1,0 +1,108 @@
+- name: Install edge sync dependencies
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.apt:
+    name:
+      - openssh-client
+      - rsync
+      - util-linux
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Validate edge sync targets
+  when: edge_sync.enabled | bool
+  ansible.builtin.assert:
+    that:
+      - edge_sync.targets is defined
+      - edge_sync.targets | length > 0
+      - item.host is defined
+      - item.user is defined
+      - item.ssh_key_path is defined
+    fail_msg: "Each edge_sync target must define host, user, and ssh_key_path."
+  loop: "{{ edge_sync.targets | default([]) }}"
+  loop_control:
+    label: "{{ item.host | default('missing-host') }}"
+
+- name: Validate edge sync items
+  when: edge_sync.enabled | bool
+  ansible.builtin.assert:
+    that:
+      - edge_sync.sync_items is defined
+      - edge_sync.sync_items | length > 0
+      - item.type is defined
+      - item.type in ['directory', 'dir', 'latest_by_name']
+      - item.source is defined
+      - item.destination is defined
+    fail_msg: "Each edge_sync sync item must define type, source, and destination."
+  loop: "{{ edge_sync.sync_items | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default(item.source | default('missing-source')) }}"
+
+- name: Check edge sync SSH keys exist
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.stat:
+    path: "{{ item.ssh_key_path }}"
+  loop: "{{ edge_sync.targets }}"
+  loop_control:
+    label: "{{ item.user }}@{{ item.host }}"
+  register: edge_sync_ssh_keys
+
+- name: Fail when an edge sync SSH key is missing
+  when:
+    - edge_sync.enabled | bool
+    - not item.stat.exists
+  ansible.builtin.fail:
+    msg: "Missing SSH key for {{ item.item.user }}@{{ item.item.host }}: {{ item.item.ssh_key_path }}"
+  loop: "{{ edge_sync_ssh_keys.results }}"
+  loop_control:
+    label: "{{ item.item.user }}@{{ item.item.host }}"
+
+- name: Install edge sync script
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.template:
+    src: hl-edge-sync.sh.j2
+    dest: "{{ edge_sync.script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install edge sync systemd service
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.template:
+    src: hl-edge-sync.service.j2
+    dest: "/etc/systemd/system/{{ edge_sync.service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install edge sync systemd timer
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.template:
+    src: hl-edge-sync.timer.j2
+    dest: "/etc/systemd/system/{{ edge_sync.service_name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and start edge sync timer
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.systemd:
+    name: "{{ edge_sync.service_name }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Run edge sync once
+  become: true
+  when:
+    - edge_sync.enabled | bool
+    - edge_sync.run_on_deploy | bool
+  ansible.builtin.systemd:
+    name: "{{ edge_sync.service_name }}.service"
+    state: started

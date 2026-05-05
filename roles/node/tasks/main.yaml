@@ -1,0 +1,121 @@
+- name: Configure chain
+  become_user: "{{ node_user }}"
+  become: true
+  copy:
+    dest: "/home/{{node_user}}/visor.json"
+    content: |
+      {"chain":"{{ chain }}"}
+
+- name: Download visor binary
+  become_user: "{{ node_user }}"
+  become: true
+  get_url:
+    dest: "/home/{{node_user}}/hl-visor"
+    url: >
+      {% if chain == "Mainnet" %}
+      {{ mainnet_visor_binary_url }}
+      {% else %}
+      {{ testnet_visor_binary_url }}
+      {% endif %}
+
+- name: Make visor binary executable
+  become_user: "{{ node_user }}"
+  become: true
+  file:
+    path: "/home/{{node_user}}/hl-visor"
+    mode: "0755"
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
+
+- name: Download public key
+  become_user: "{{ node_user }}"
+  become: true
+  get_url:
+    dest: "/home/{{node_user}}/pub_key.asc"
+    url: "{{ pub_key_url }}"
+
+- name: Ensure {{ node_user }} has a ~/.gnupg with correct perms
+  become_user: "{{ node_user }}"
+  become: true
+  ansible.builtin.file:
+    path: "/home/{{ node_user }}/.gnupg"
+    state: directory
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
+    mode: "0700"
+
+- name: Import public key
+  become_user: "{{  node_user }}"
+  become: true
+  environment:
+    GNUPGHOME: "/home/{{ node_user }}/.gnupg"
+  ansible.builtin.command:
+    cmd: "gpg --import /home/{{ node_user }}/pub_key.asc"
+
+- name: Download signature file
+  become_user: "{{ node_user }}"
+  become: true
+  get_url:
+    dest: "/home/{{node_user}}/hl-visor.asc"
+    url: >
+      {% if chain == "Mainnet" %}
+      {{ mainnet_signature_url }}
+      {% else %}
+      {{ testnet_signature_url }}
+      {% endif %}
+
+- name: Verify visor binary signature
+  become_user: "{{ node_user }}"
+  become: true
+  environment:
+    GNUPGHOME: "/home/{{ node_user }}/.gnupg" 
+  ansible.builtin.command:
+      cmd: "gpg --verify /home/{{ node_user }}/hl-visor.asc /home/{{ node_user }}/hl-visor"
+
+- name: Build override_gossip_config.json from live gossip peers
+  when: gossip_config.download_peers | default(false)
+  block:
+    - name: Fetch Hyperliquid gossip root IPs
+      ansible.builtin.uri:
+        url: https://api.hyperliquid.xyz/info
+        method: POST
+        headers:
+          Content-Type: application/json
+        body_format: json
+        body:
+          type: gossipRootIps
+        return_content: true
+        status_code: 200
+        timeout: 20
+      register: gossip_ips_resp
+
+- name: Validate response and expose as gossip_config.ip
+  when: gossip_config.download_peers | default(false)
+  ansible.builtin.set_fact:
+    gossip_config:
+      ip: "{{ (gossip_ips_resp.json | default([])) | list }}"
+      try_new_peers: "{{ gossip_config.try_new_peers | default(true) }}"
+      chain: "{{ chain }}"
+  failed_when: >
+    gossip_ips_resp.json is not defined or
+    (gossip_ips_resp.json | type_debug != 'list') or
+    (gossip_ips_resp.json | length == 0)
+
+- name: Create override_gossip_config.json
+  template:
+    src: templates/override_gossip_config.json.j2
+    dest: "/home/{{ node_user }}/override_gossip_config.json"
+  
+- name: Create systemd service file for hl-visor
+  become: true
+  template:
+    src: templates/hl-visor.service.j2
+    dest: "/etc/systemd/system/hl-visor.service"
+
+- name: Enable and start hl-visor service
+  become: true
+  systemd:
+    name: hl-visor.service
+    enabled: yes
+    state: started
+    daemon_reload: yes

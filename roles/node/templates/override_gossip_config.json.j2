@@ -1,0 +1,7 @@
+{
+	"root_node_ips": [
+{% for ip in gossip_config.ip %}{"Ip": "{{ ip }}"}{% if not loop.last %},{% endif %}{% endfor %}
+	],
+	"try_new_peers": {{ gossip_config.try_new_peers | default(true) | bool | to_json }},
+	"chain": "{{ chain }}"
+}

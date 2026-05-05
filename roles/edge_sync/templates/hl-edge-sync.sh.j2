@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOCK={{ edge_sync.lock_path | quote }}
+
+TARGET_HOSTS=(
+{% for target in edge_sync.targets %}
+  {{ target.host | to_json }}
+{% endfor %}
+)
+TARGET_USERS=(
+{% for target in edge_sync.targets %}
+  {{ target.user | to_json }}
+{% endfor %}
+)
+TARGET_KEYS=(
+{% for target in edge_sync.targets %}
+  {{ target.ssh_key_path | to_json }}
+{% endfor %}
+)
+
+SYNC_NAMES=(
+{% for item in edge_sync.sync_items %}
+  {{ (item.name | default(item.type ~ ':' ~ item.source)) | to_json }}
+{% endfor %}
+)
+SYNC_TYPES=(
+{% for item in edge_sync.sync_items %}
+  {{ item.type | to_json }}
+{% endfor %}
+)
+SYNC_SOURCES=(
+{% for item in edge_sync.sync_items %}
+  {{ item.source | to_json }}
+{% endfor %}
+)
+SYNC_DESTINATIONS=(
+{% for item in edge_sync.sync_items %}
+  {{ item.destination | to_json }}
+{% endfor %}
+)
+SYNC_PATTERNS=(
+{% for item in edge_sync.sync_items %}
+  {{ (item.pattern | default('*.rmp')) | to_json }}
+{% endfor %}
+)
+SYNC_DATE_SUBDIR=(
+{% for item in edge_sync.sync_items %}
+  {{ (item.date_subdir | default(false) | bool | ternary('true', 'false')) | to_json }}
+{% endfor %}
+)
+SYNC_DELETE=(
+{% for item in edge_sync.sync_items %}
+  {{ (item.delete | default(true) | bool | ternary('true', 'false')) | to_json }}
+{% endfor %}
+)
+
+CURRENT_TARGET_HOST=
+CURRENT_TARGET_USER=
+CURRENT_TARGET_KEY=
+
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+
+remote_host() {
+  printf "%s@%s" "$CURRENT_TARGET_USER" "$CURRENT_TARGET_HOST"
+}
+
+ssh_base() {
+  ssh -i "$CURRENT_TARGET_KEY" -o IdentitiesOnly=yes -o BatchMode=yes "$@"
+}
+
+remote_quote() {
+  printf "%q" "$1"
+}
+
+remote_mkdir() {
+  local path="$1"
+
+  ssh_base "$(remote_host)" "mkdir -p -- $(remote_quote "$path")"
+}
+
+rsync_base() {
+  rsync -az --partial --delay-updates \
+    --exclude ".env" \
+    --exclude "*.key" \
+    --exclude "*.pem" \
+    --exclude "*.secret" \
+    --exclude "id_rsa*" \
+    -e "ssh -i $CURRENT_TARGET_KEY -o IdentitiesOnly=yes -o BatchMode=yes" \
+    "$@"
+}
+
+sync_dir() {
+  local src="$1"
+  local dst="$2"
+  local delete="${3:-true}"
+
+  if [[ ! -d "$src" ]]; then
+    echo "Source directory does not exist: $src"
+    return 0
+  fi
+
+  remote_mkdir "$dst" || return
+
+  if [[ "$delete" == "true" ]]; then
+    rsync_base \
+      --delete \
+      "$src" \
+      "$(remote_host):$dst" || return
+  else
+    rsync_base \
+      "$src" \
+      "$(remote_host):$dst" || return
+  fi
+}
+
+sync_latest_by_name() {
+  local src_dir="$1"
+  local dst_dir="$2"
+  local pattern="${3:-*.rmp}"
+  local delete="${4:-true}"
+
+  if [[ ! -d "$src_dir" ]]; then
+    echo "Source directory does not exist: $src_dir"
+    return 0
+  fi
+
+  local latest
+  latest="$(find "$src_dir" -maxdepth 1 -type f -name "$pattern" -printf "%f\n" | sort -V | tail -n 1)"
+
+  if [[ -z "$latest" ]]; then
+    echo "No files matching $pattern in $src_dir"
+    return 0
+  fi
+
+  remote_mkdir "$dst_dir" || return
+
+  rsync_base \
+    "$src_dir/$latest" \
+    "$(remote_host):$dst_dir/" || return
+
+  if [[ "$delete" == "true" ]]; then
+    ssh_base "$(remote_host)" \
+      "find $(remote_quote "$dst_dir") -maxdepth 1 -type f -name $(remote_quote "$pattern") ! -name $(remote_quote "$latest") -delete" || return
+  fi
+}
+
+sync_item() {
+  local item_index="$1"
+  local name="${SYNC_NAMES[$item_index]}"
+  local type="${SYNC_TYPES[$item_index]}"
+  local source="${SYNC_SOURCES[$item_index]}"
+  local destination="${SYNC_DESTINATIONS[$item_index]}"
+  local pattern="${SYNC_PATTERNS[$item_index]}"
+  local date_subdir="${SYNC_DATE_SUBDIR[$item_index]}"
+  local delete="${SYNC_DELETE[$item_index]}"
+
+  if [[ "$date_subdir" == "true" ]]; then
+    local today
+    today="$(date +%Y%m%d)"
+    source="${source%/}/$today/"
+    destination="${destination%/}/$today/"
+  fi
+
+  echo "Syncing $name to $(remote_host)"
+
+  case "$type" in
+    directory|dir)
+      sync_dir "$source" "$destination" "$delete"
+      ;;
+    latest_by_name)
+      sync_latest_by_name "$source" "$destination" "$pattern" "$delete"
+      ;;
+    *)
+      echo "Unsupported sync item type: $type" >&2
+      return 1
+      ;;
+  esac
+}
+
+sync_target() {
+  local item_index
+
+  for item_index in "${!SYNC_TYPES[@]}"; do
+    sync_item "$item_index" || return
+  done
+}
+
+main() {
+  local target_index
+  local failures=0
+
+  for target_index in "${!TARGET_HOSTS[@]}"; do
+    CURRENT_TARGET_HOST="${TARGET_HOSTS[$target_index]}"
+    CURRENT_TARGET_USER="${TARGET_USERS[$target_index]}"
+    CURRENT_TARGET_KEY="${TARGET_KEYS[$target_index]}"
+
+    if ! sync_target; then
+      echo "Sync failed for $(remote_host)" >&2
+      failures=$((failures + 1))
+    fi
+  done
+
+  if (( failures > 0 )); then
+    exit 1
+  fi
+}
+
+main
