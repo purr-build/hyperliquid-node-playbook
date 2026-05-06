@@ -1,0 +1,19 @@
+edge_sync:
+  enabled: {{ edge_sync.enabled | default(true) | bool | ternary('true', 'false') }}
+  lock_path: {{ (edge_sync.lock_path | default('/tmp/hl-edge-sync.lock')) | to_json }}
+  targets:
+{% for target in edge_sync.targets %}
+    - host: {{ target.host | to_json }}
+      user: {{ target.user | to_json }}
+      ssh_key_path: {{ target.ssh_key_path | to_json }}
+{% endfor %}
+  sync_items:
+{% for item in edge_sync.sync_items %}
+    - name: {{ (item.name | default(item.type ~ ':' ~ item.source)) | to_json }}
+      type: {{ item.type | to_json }}
+      source: {{ item.source | to_json }}
+      destination: {{ item.destination | to_json }}
+      pattern: {{ (item.pattern | default('*.rmp')) | to_json }}
+      date_subdir: {{ (item.date_subdir | default(false) | bool) | ternary('true', 'false') }}
+      delete: {{ (item.delete | default(true) | bool) | ternary('true', 'false') }}
+{% endfor %}

@@ -48,6 +48,8 @@ edge_sync:
     - host: 192.0.2.10
       user: hlmirror
       ssh_key_path: /path/to/edge-sync-key
+  config_path: /etc/hl-edge-sync.yml
+  script_path: /usr/local/bin/hl-edge-sync.py
   sync_items:
     - name: node_fills
       type: directory
@@ -63,7 +65,16 @@ edge_sync:
       delete: true
 ```
 
-Each sync item supports `type: directory` for a full directory sync and `type: latest_by_name` for copying only the newest matching file.
+Each sync item supports `type: directory` for a full directory sync and `type: latest_by_name` for copying only the newest matching file. When `latest_by_name` uses `date_subdir: true` with `delete: true`, cleanup removes older matching files from the destination root, not only from today's subdirectory.
+
+The installed script accepts the same `edge_sync` structure from a rendered config file or a full `vars.local.yml`-style file:
+
+```bash
+/usr/local/bin/hl-edge-sync.py --config /etc/hl-edge-sync.yml --dry-run
+/usr/local/bin/hl-edge-sync.py --config vars.local.yml --plan
+```
+
+Use `--dry-run` to print the rsync itemized changes and remote files that would be deleted without applying them. Use `--list-changes` during a real run if you want rsync itemized output in the service logs.
 
 ## Roles
 
@@ -91,7 +102,7 @@ Installs a cron job to prune old node data. Configure the path, schedule, and re
 
 ### `edge_sync`
 
-Installs `/usr/local/bin/hl-edge-sync.sh`, configures systemd service/timer units, and syncs configured public data paths to mirror hosts.
+Installs `/usr/local/bin/hl-edge-sync.py`, writes `/etc/hl-edge-sync.yml`, configures systemd service/timer units, and syncs configured public data paths to mirror hosts.
 
 ## Usage
 

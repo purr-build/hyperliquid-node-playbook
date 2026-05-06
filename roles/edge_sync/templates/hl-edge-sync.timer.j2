@@ -2,11 +2,11 @@
 Description=Run Hyperliquid edge sync periodically
 
 [Timer]
-OnBootSec={{ edge_sync.timer_on_boot_sec }}
-OnUnitActiveSec={{ edge_sync.timer_on_unit_active_sec }}
-AccuracySec={{ edge_sync.timer_accuracy_sec }}
+OnBootSec={{ edge_sync.timer_on_boot_sec | default('2min') }}
+OnUnitActiveSec={{ edge_sync.timer_on_unit_active_sec | default('5min') }}
+AccuracySec={{ edge_sync.timer_accuracy_sec | default('30s') }}
 Persistent=true
-Unit={{ edge_sync.service_name }}.service
+Unit={{ edge_sync.service_name | default('hl-edge-sync') }}.service
 
 [Install]
 WantedBy=timers.target

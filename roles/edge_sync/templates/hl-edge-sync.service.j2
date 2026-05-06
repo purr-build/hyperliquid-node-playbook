@@ -7,5 +7,5 @@ After=network-online.target
 Type=oneshot
 User=root
 Group=root
-ExecStart={{ edge_sync.script_path }}
-TimeoutStartSec={{ edge_sync.timeout_start_sec }}
+ExecStart={{ edge_sync.script_path | default('/usr/local/bin/hl-edge-sync.py') }} --config {{ edge_sync.config_path | default('/etc/hl-edge-sync.yml') }}
+TimeoutStartSec={{ edge_sync.timeout_start_sec | default('30min') }}

@@ -15,7 +15,7 @@ gossip_config:
 
 visor:
   exec_start: |
-    /home/{{node_user}}/hl-visor run-non-validator --write-fills --write-hip3-oracle-updates --write-misc-events --write-system-and-core-writer-actions --write-trades
+    /home/{{node_user}}/hl-visor run-non-validator --write-fills --write-hip3-oracle-updates --write-misc-events --write-system-and-core-writer-actions
   restart_sec: 5
 
 pruner:
@@ -28,7 +28,8 @@ edge_sync:
   enabled: false
   targets: []
   lock_path: /tmp/hl-edge-sync.lock
-  script_path: /usr/local/bin/hl-edge-sync.sh
+  config_path: /etc/hl-edge-sync.yml
+  script_path: /usr/local/bin/hl-edge-sync.py
   service_name: hl-edge-sync
   sync_items:
     - name: node_fills

@@ -3,9 +3,10 @@
   when: edge_sync.enabled | bool
   ansible.builtin.apt:
     name:
+      - python3
+      - python3-yaml
       - openssh-client
       - rsync
-      - util-linux
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -63,18 +64,28 @@
   become: true
   when: edge_sync.enabled | bool
   ansible.builtin.template:
-    src: hl-edge-sync.sh.j2
-    dest: "{{ edge_sync.script_path }}"
+    src: hl-edge-sync.py.j2
+    dest: "{{ edge_sync.script_path | default('/usr/local/bin/hl-edge-sync.py') }}"
     owner: root
     group: root
     mode: "0755"
+
+- name: Install edge sync config
+  become: true
+  when: edge_sync.enabled | bool
+  ansible.builtin.template:
+    src: hl-edge-sync.yml.j2
+    dest: "{{ edge_sync.config_path | default('/etc/hl-edge-sync.yml') }}"
+    owner: root
+    group: root
+    mode: "0600"
 
 - name: Install edge sync systemd service
   become: true
   when: edge_sync.enabled | bool
   ansible.builtin.template:
     src: hl-edge-sync.service.j2
-    dest: "/etc/systemd/system/{{ edge_sync.service_name }}.service"
+    dest: "/etc/systemd/system/{{ edge_sync.service_name | default('hl-edge-sync') }}.service"
     owner: root
     group: root
     mode: "0644"
@@ -84,7 +95,7 @@
   when: edge_sync.enabled | bool
   ansible.builtin.template:
     src: hl-edge-sync.timer.j2
-    dest: "/etc/systemd/system/{{ edge_sync.service_name }}.timer"
+    dest: "/etc/systemd/system/{{ edge_sync.service_name | default('hl-edge-sync') }}.timer"
     owner: root
     group: root
     mode: "0644"
@@ -93,7 +104,7 @@
   become: true
   when: edge_sync.enabled | bool
   ansible.builtin.systemd:
-    name: "{{ edge_sync.service_name }}.timer"
+    name: "{{ edge_sync.service_name | default('hl-edge-sync') }}.timer"
     enabled: true
     state: started
     daemon_reload: true
@@ -102,7 +113,7 @@
   become: true
   when:
     - edge_sync.enabled | bool
-    - edge_sync.run_on_deploy | bool
+    - edge_sync.run_on_deploy | default(false) | bool
   ansible.builtin.systemd:
-    name: "{{ edge_sync.service_name }}.service"
+    name: "{{ edge_sync.service_name | default('hl-edge-sync') }}.service"
     state: started

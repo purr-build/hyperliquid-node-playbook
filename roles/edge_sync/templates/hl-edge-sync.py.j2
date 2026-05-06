@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+{% raw %}
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import fnmatch
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+from typing import Any
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - handled at runtime with a clear error
+    yaml = None
+
+
+DEFAULT_CONFIG_PATH = "/etc/hl-edge-sync.yml"
+DEFAULT_LOCK_PATH = "/tmp/hl-edge-sync.lock"
+EXCLUDES = [".env", "*.key", "*.pem", "*.secret", "id_rsa*"]
+TEMPLATE_RE = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
+
+
+class ConfigError(Exception):
+    pass
+
+
+class CommandError(Exception):
+    pass
+
+
+class AlreadyRunning(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class Target:
+    host: str
+    user: str
+    ssh_key_path: str
+
+    @property
+    def remote(self) -> str:
+        return f"{self.user}@{self.host}"
+
+
+@dataclass(frozen=True)
+class SyncItem:
+    name: str
+    type: str
+    source: str
+    destination: str
+    pattern: str
+    date_subdir: bool
+    delete: bool
+
+
+@dataclass(frozen=True)
+class EdgeSyncConfig:
+    enabled: bool
+    lock_path: str
+    targets: list[Target]
+    sync_items: list[SyncItem]
+
+
+def eprint(*parts: object) -> None:
+    print(*parts, file=sys.stderr)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Sync Hyperliquid public data to edge mirrors.",
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=os.environ.get("HL_EDGE_SYNC_CONFIG", DEFAULT_CONFIG_PATH),
+        help=(
+            "YAML config path. Accepts either an edge_sync mapping or a full "
+            "vars.local.yml-style file with an edge_sync key."
+        ),
+    )
+    parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Preview rsync and delete changes without writing to the remote host.",
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Print the resolved sync plan and exit without connecting to targets.",
+    )
+    parser.add_argument(
+        "--list-changes",
+        action="store_true",
+        help="Print rsync itemized changes while applying the sync.",
+    )
+    parser.add_argument(
+        "--date",
+        metavar="YYYYMMDD",
+        help="Override the date used for sync items with date_subdir enabled.",
+    )
+    parser.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="Skip the lock file. Intended only for manual diagnostics.",
+    )
+    return parser.parse_args()
+
+
+def load_yaml_config(path: str) -> Mapping[str, Any]:
+    if yaml is None:
+        raise ConfigError("Missing PyYAML. Install python3-yaml or run the Ansible role.")
+
+    config_path = Path(path)
+    if not config_path.exists():
+        raise ConfigError(f"Config file does not exist: {path}")
+
+    with config_path.open("r", encoding="utf-8") as config_file:
+        loaded = yaml.safe_load(config_file) or {}
+
+    if not isinstance(loaded, Mapping):
+        raise ConfigError("Config file must contain a YAML mapping.")
+
+    variables = collect_template_variables(loaded)
+    rendered = render_templates(loaded, variables)
+    config = rendered.get("edge_sync", rendered)
+
+    if not isinstance(config, Mapping):
+        raise ConfigError("edge_sync config must be a YAML mapping.")
+
+    return config
+
+
+def collect_template_variables(root: Mapping[str, Any]) -> dict[str, str]:
+    variables = {"node_user": os.environ.get("HL_NODE_USER", "hyperliquid")}
+
+    for key, value in root.items():
+        if key == "edge_sync":
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            variables[str(key)] = str(value)
+
+    return variables
+
+
+def render_templates(value: Any, variables: Mapping[str, str]) -> Any:
+    if isinstance(value, str):
+        return TEMPLATE_RE.sub(lambda match: render_template_var(match, variables), value)
+    if isinstance(value, list):
+        return [render_templates(item, variables) for item in value]
+    if isinstance(value, Mapping):
+        return {key: render_templates(item, variables) for key, item in value.items()}
+    return value
+
+
+def render_template_var(match: re.Match[str], variables: Mapping[str, str]) -> str:
+    name = match.group(1)
+    if name not in variables:
+        raise ConfigError(
+            f"Unsupported template variable '{{{{ {name} }}}}' in config. "
+            "Define it as a top-level scalar or use the rendered Ansible config."
+        )
+    return variables[name]
+
+
+def normalize_config(raw_config: Mapping[str, Any]) -> EdgeSyncConfig:
+    enabled = parse_bool(raw_config.get("enabled", True), "edge_sync.enabled")
+    lock_path = str(raw_config.get("lock_path") or DEFAULT_LOCK_PATH)
+
+    if not enabled:
+        return EdgeSyncConfig(enabled=False, lock_path=lock_path, targets=[], sync_items=[])
+
+    raw_targets = raw_config.get("targets") or []
+    raw_items = raw_config.get("sync_items") or []
+
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise ConfigError("edge_sync.targets must be a non-empty list.")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ConfigError("edge_sync.sync_items must be a non-empty list.")
+
+    targets = [normalize_target(target, index) for index, target in enumerate(raw_targets)]
+    sync_items = [normalize_sync_item(item, index) for index, item in enumerate(raw_items)]
+    return EdgeSyncConfig(enabled=True, lock_path=lock_path, targets=targets, sync_items=sync_items)
+
+
+def normalize_target(raw_target: Any, index: int) -> Target:
+    if not isinstance(raw_target, Mapping):
+        raise ConfigError(f"edge_sync.targets[{index}] must be a mapping.")
+
+    host = require_string(raw_target, "host", f"edge_sync.targets[{index}]")
+    user = require_string(raw_target, "user", f"edge_sync.targets[{index}]")
+    ssh_key_path = require_string(raw_target, "ssh_key_path", f"edge_sync.targets[{index}]")
+    return Target(host=host, user=user, ssh_key_path=ssh_key_path)
+
+
+def normalize_sync_item(raw_item: Any, index: int) -> SyncItem:
+    if not isinstance(raw_item, Mapping):
+        raise ConfigError(f"edge_sync.sync_items[{index}] must be a mapping.")
+
+    item_type = require_string(raw_item, "type", f"edge_sync.sync_items[{index}]")
+    if item_type not in {"directory", "dir", "latest_by_name"}:
+        raise ConfigError(
+            f"edge_sync.sync_items[{index}].type must be directory, dir, or latest_by_name."
+        )
+
+    source = require_string(raw_item, "source", f"edge_sync.sync_items[{index}]")
+    destination = require_string(raw_item, "destination", f"edge_sync.sync_items[{index}]")
+    name = str(raw_item.get("name") or f"{item_type}:{source}")
+    pattern = str(raw_item.get("pattern") or "*.rmp")
+    date_subdir = parse_bool(
+        raw_item.get("date_subdir", False),
+        f"edge_sync.sync_items[{index}].date_subdir",
+    )
+    delete = parse_bool(raw_item.get("delete", True), f"edge_sync.sync_items[{index}].delete")
+
+    return SyncItem(
+        name=name,
+        type=item_type,
+        source=source,
+        destination=destination,
+        pattern=pattern,
+        date_subdir=date_subdir,
+        delete=delete,
+    )
+
+
+def require_string(mapping: Mapping[str, Any], key: str, context: str) -> str:
+    value = mapping.get(key)
+    if value is None or str(value) == "":
+        raise ConfigError(f"{context}.{key} is required.")
+    return str(value)
+
+
+def parse_bool(value: Any, context: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ConfigError(f"{context} must be a boolean.")
+
+
+@contextlib.contextmanager
+def edge_sync_lock(lock_path: str, disabled: bool = False):
+    if disabled:
+        yield
+        return
+
+    lock_file = Path(lock_path)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_file.open("w", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlreadyRunning from exc
+        yield
+
+
+def current_date_stamp(date_override: str | None) -> str:
+    if date_override is None:
+        return dt.date.today().strftime("%Y%m%d")
+    if not re.fullmatch(r"\d{8}", date_override):
+        raise ConfigError("--date must use YYYYMMDD format.")
+    return date_override
+
+
+def resolved_paths(item: SyncItem, date_stamp: str) -> tuple[str, str]:
+    source = item.source
+    destination = item.destination
+
+    if item.date_subdir:
+        source = f"{source.rstrip('/')}/{date_stamp}/"
+        destination = f"{destination.rstrip('/')}/{date_stamp}/"
+
+    return source, destination
+
+
+def print_plan(config_path: str, config: EdgeSyncConfig, date_stamp: str, mode: str) -> None:
+    print(f"Config: {config_path}")
+    print(f"Mode: {mode}")
+    print(f"Lock: {config.lock_path}")
+    print(f"Date: {date_stamp}")
+
+    for target in config.targets:
+        print(f"Target: {target.remote}")
+        print(f"  SSH key: {target.ssh_key_path}")
+
+        for item in config.sync_items:
+            source, destination = resolved_paths(item, date_stamp)
+            print(f"  - {item.name} [{item.type}]")
+            print(f"    source: {source}")
+            print(f"    destination: {destination}")
+            if item.type == "latest_by_name":
+                print(f"    pattern: {item.pattern}")
+            print(f"    delete: {str(item.delete).lower()}")
+
+
+def sync_all(
+    config: EdgeSyncConfig,
+    date_stamp: str,
+    dry_run: bool,
+    list_changes: bool,
+) -> int:
+    failures = 0
+
+    for target in config.targets:
+        target_failed = False
+        print(f"Target {target.remote}")
+
+        for item in config.sync_items:
+            try:
+                sync_item(target, item, date_stamp, dry_run=dry_run, list_changes=list_changes)
+            except CommandError as exc:
+                eprint(exc)
+                target_failed = True
+                break
+
+        if target_failed:
+            eprint(f"Sync failed for {target.remote}")
+            failures += 1
+
+    return 1 if failures else 0
+
+
+def sync_item(
+    target: Target,
+    item: SyncItem,
+    date_stamp: str,
+    dry_run: bool,
+    list_changes: bool,
+) -> None:
+    source, destination = resolved_paths(item, date_stamp)
+    print(f"Syncing {item.name} to {target.remote}")
+
+    if item.type in {"directory", "dir"}:
+        sync_directory(
+            target,
+            source,
+            destination,
+            delete=item.delete,
+            dry_run=dry_run,
+            list_changes=list_changes,
+        )
+        return
+
+    if item.type == "latest_by_name":
+        sync_latest_by_name(
+            target,
+            source,
+            destination,
+            cleanup_root_dir=item.destination if item.date_subdir else destination,
+            pattern=item.pattern,
+            delete=item.delete,
+            dry_run=dry_run,
+            list_changes=list_changes,
+        )
+        return
+
+    raise ConfigError(f"Unsupported sync item type: {item.type}")
+
+
+def sync_directory(
+    target: Target,
+    source: str,
+    destination: str,
+    delete: bool,
+    dry_run: bool,
+    list_changes: bool,
+) -> None:
+    if not Path(source).is_dir():
+        print(f"Source directory does not exist: {source}")
+        return
+
+    remote_mkdir(target, destination, dry_run=dry_run)
+    rsync(
+        target,
+        [source, f"{target.remote}:{destination}"],
+        delete=delete,
+        dry_run=dry_run,
+        list_changes=list_changes,
+    )
+
+
+def sync_latest_by_name(
+    target: Target,
+    source_dir: str,
+    destination_dir: str,
+    cleanup_root_dir: str,
+    pattern: str,
+    delete: bool,
+    dry_run: bool,
+    list_changes: bool,
+) -> None:
+    if not Path(source_dir).is_dir():
+        print(f"Source directory does not exist: {source_dir}")
+        return
+
+    latest = latest_matching_file(source_dir, pattern)
+    if latest is None:
+        print(f"No files matching {pattern} in {source_dir}")
+        return
+
+    remote_mkdir(target, destination_dir, dry_run=dry_run)
+    rsync(
+        target,
+        [str(Path(source_dir) / latest), f"{target.remote}:{destination_dir.rstrip('/')}/"],
+        delete=False,
+        dry_run=dry_run,
+        list_changes=list_changes,
+    )
+
+    if delete:
+        delete_old_latest_files(
+            target,
+            cleanup_root_dir,
+            f"{destination_dir.rstrip('/')}/{latest}",
+            pattern,
+            dry_run=dry_run,
+        )
+
+
+def latest_matching_file(source_dir: str, pattern: str) -> str | None:
+    files = [
+        path.name
+        for path in Path(source_dir).iterdir()
+        if path.is_file() and fnmatch.fnmatch(path.name, pattern)
+    ]
+    if not files:
+        return None
+    return sorted(files, key=version_sort_key)[-1]
+
+
+def version_sort_key(value: str) -> list[tuple[int, str | int]]:
+    key: list[tuple[int, str | int]] = []
+    for part in re.split(r"(\d+)", value):
+        if part.isdigit():
+            key.append((1, int(part)))
+        else:
+            key.append((0, part))
+    return key
+
+
+def remote_mkdir(target: Target, path: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f"Would ensure remote directory: {target.remote}:{path}")
+        return
+
+    run_command(ssh_command(target, f"mkdir -p -- {shlex.quote(path)}"))
+
+
+def delete_old_latest_files(
+    target: Target,
+    cleanup_root_dir: str,
+    keep_path: str,
+    pattern: str,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        command = (
+            f"if [ -d {shlex.quote(cleanup_root_dir)} ]; then "
+            f"find {shlex.quote(cleanup_root_dir)} -type f "
+            f"-name {shlex.quote(pattern)} ! -path {shlex.quote(keep_path)} -print; "
+            "fi"
+        )
+        result = run_command(ssh_command(target, command), capture=True)
+        output = result.stdout.strip()
+        if output:
+            print("Would delete remote files:")
+            print(output)
+        else:
+            print("No remote files would be deleted.")
+        return
+
+    command = (
+        f"find {shlex.quote(cleanup_root_dir)} -type f "
+        f"-name {shlex.quote(pattern)} ! -path {shlex.quote(keep_path)} -print -delete; "
+        f"find {shlex.quote(cleanup_root_dir)} -depth -mindepth 1 -type d -empty -print -delete"
+    )
+    run_command(ssh_command(target, command))
+
+
+def rsync(
+    target: Target,
+    paths: list[str],
+    delete: bool,
+    dry_run: bool,
+    list_changes: bool,
+) -> None:
+    command = [
+        "rsync",
+        "-az",
+        "--partial",
+        "--delay-updates",
+    ]
+
+    for exclude in EXCLUDES:
+        command.extend(["--exclude", exclude])
+
+    if dry_run:
+        command.extend(["--dry-run", "--itemize-changes"])
+    elif list_changes:
+        command.append("--itemize-changes")
+
+    if delete:
+        command.append("--delete")
+
+    ssh_transport = (
+        f"ssh -i {shlex.quote(target.ssh_key_path)} "
+        "-o IdentitiesOnly=yes -o BatchMode=yes"
+    )
+    command.extend(["-e", ssh_transport])
+    command.extend(paths)
+    run_command(command)
+
+
+def ssh_command(target: Target, remote_command: str) -> list[str]:
+    return [
+        "ssh",
+        "-i",
+        target.ssh_key_path,
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "BatchMode=yes",
+        target.remote,
+        remote_command,
+    ]
+
+
+def run_command(command: list[str], capture: bool = False) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+    except FileNotFoundError as exc:
+        raise CommandError(f"Missing command: {command[0]}") from exc
+
+    if result.returncode != 0:
+        if capture:
+            if result.stdout:
+                print(result.stdout, end="")
+            if result.stderr:
+                eprint(result.stderr, end="")
+        raise CommandError(f"Command failed ({result.returncode}): {shlex.join(command)}")
+
+    return result
+
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        config = normalize_config(load_yaml_config(args.config))
+        if not config.enabled:
+            print("edge_sync.enabled is false; nothing to do.")
+            return 0
+
+        date_stamp = current_date_stamp(args.date)
+        if args.plan:
+            print_plan(args.config, config, date_stamp, mode="plan")
+            return 0
+
+        if args.dry_run:
+            print("Dry run: no files will be synced or deleted.")
+            print_plan(args.config, config, date_stamp, mode="dry-run")
+
+        with edge_sync_lock(config.lock_path, disabled=args.no_lock):
+            return sync_all(
+                config,
+                date_stamp,
+                dry_run=args.dry_run,
+                list_changes=args.list_changes,
+            )
+
+    except AlreadyRunning:
+        print("Another edge sync run is already active; exiting.")
+        return 0
+    except ConfigError as exc:
+        eprint(f"Config error: {exc}")
+        return 2
+    except CommandError as exc:
+        eprint(exc)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+{% endraw %}
