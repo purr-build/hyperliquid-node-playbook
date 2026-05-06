@@ -15,7 +15,7 @@ gossip_config:
 
 visor:
   exec_start: |
-    /home/{{node_user}}/hl-visor run-non-validator --write-fills --write-hip3-oracle-updates --write-misc-events --write-system-and-core-writer-actions
+    /home/{{node_user}}/hl-visor run-non-validator --write-fills --write-hip3-oracle-updates --write-misc-events --write-system-and-core-writer-actions --write-trades
   restart_sec: 5
 
 pruner:
