@@ -1,3 +1,7 @@
+- name: Merge ClickHouse settings onto defaults
+  ansible.builtin.set_fact:
+    clickhouse: "{{ clickhouse_defaults | combine(clickhouse | default({})) }}"
+
 - name: Ensure Docker is installed
   when: clickhouse.enabled | bool
   ansible.builtin.include_role:

@@ -1,6 +1,8 @@
-clickhouse:
+# Base defaults. The role merges any `clickhouse` overrides (from vars.yml or
+# vars.local.yml) onto these, so a partial override block is enough.
+clickhouse_defaults:
   enabled: false
-  image: clickhouse/clickhouse-server:26.8
+  image: clickhouse/clickhouse-server:26.4
   container_name: clickhouse
   restart_policy: unless-stopped
   # Host interface the container ports are published on. Loopback only by
