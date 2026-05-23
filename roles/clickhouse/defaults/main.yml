@@ -1,0 +1,24 @@
+clickhouse:
+  enabled: false
+  image: clickhouse/clickhouse-server:24.8
+  container_name: clickhouse
+  restart_policy: unless-stopped
+  # Host interface the container ports are published on. Loopback only by
+  # default so ClickHouse is never reachable over the external network.
+  bind_host: 127.0.0.1
+  http_port: 8123
+  native_port: 9000
+  # Address ClickHouse listens on *inside* the container. 0.0.0.0 is required
+  # for the published ports above to reach the server; isolation is enforced by
+  # bind_host, not by this value.
+  listen_host: 0.0.0.0
+  data_dir: /var/lib/clickhouse-docker
+  config_dir: /etc/clickhouse-docker
+  user: default
+  password: ""
+  db: default
+  # Soft memory limit applied to the ClickHouse server (bytes). 0 disables it.
+  max_server_memory_usage: 0
+  # Docker container memory limit (e.g. "4g"). "0" disables it.
+  memory_limit: "0"
+  ulimit_nofile: 262144

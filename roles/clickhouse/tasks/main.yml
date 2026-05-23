@@ -1,0 +1,85 @@
+- name: Ensure Docker is installed
+  when: clickhouse.enabled | bool
+  ansible.builtin.include_role:
+    name: geerlingguy.docker
+
+- name: Install Docker SDK for Python
+  become: true
+  when: clickhouse.enabled | bool
+  ansible.builtin.apt:
+    name: python3-docker
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create ClickHouse data directory
+  become: true
+  when: clickhouse.enabled | bool
+  ansible.builtin.file:
+    path: "{{ clickhouse.data_dir }}"
+    state: directory
+    owner: "101"
+    group: "101"
+    mode: "0750"
+
+- name: Create ClickHouse config directories
+  become: true
+  when: clickhouse.enabled | bool
+  ansible.builtin.file:
+    path: "{{ clickhouse.config_dir }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - config.d
+    - users.d
+
+- name: Render ClickHouse server config
+  become: true
+  when: clickhouse.enabled | bool
+  ansible.builtin.template:
+    src: listen.xml.j2
+    dest: "{{ clickhouse.config_dir }}/config.d/listen.xml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ClickHouse container
+
+- name: Render ClickHouse user config
+  become: true
+  when: clickhouse.enabled | bool
+  ansible.builtin.template:
+    src: users.xml.j2
+    dest: "{{ clickhouse.config_dir }}/users.d/ansible-user.xml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart ClickHouse container
+
+- name: Run ClickHouse container
+  become: true
+  when: clickhouse.enabled | bool
+  community.docker.docker_container:
+    name: "{{ clickhouse.container_name }}"
+    image: "{{ clickhouse.image }}"
+    state: started
+    restart_policy: "{{ clickhouse.restart_policy }}"
+    # Published only on bind_host (loopback by default) so the server is not
+    # reachable over the external network.
+    published_ports:
+      - "{{ clickhouse.bind_host }}:{{ clickhouse.http_port }}:8123"
+      - "{{ clickhouse.bind_host }}:{{ clickhouse.native_port }}:9000"
+    env:
+      CLICKHOUSE_DB: "{{ clickhouse.db | string }}"
+      CLICKHOUSE_USER: "{{ clickhouse.user | string }}"
+      CLICKHOUSE_PASSWORD: "{{ clickhouse.password | string }}"
+    volumes:
+      - "{{ clickhouse.data_dir }}:/var/lib/clickhouse"
+      - "{{ clickhouse.config_dir }}/config.d:/etc/clickhouse-server/config.d:ro"
+      - "{{ clickhouse.config_dir }}/users.d:/etc/clickhouse-server/users.d:ro"
+    ulimits:
+      - "nofile:{{ clickhouse.ulimit_nofile }}:{{ clickhouse.ulimit_nofile }}"
+    memory: "{{ clickhouse.memory_limit | default('0') }}"
+    comparisons:
+      '*': strict

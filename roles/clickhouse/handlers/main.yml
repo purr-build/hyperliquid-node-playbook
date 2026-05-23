@@ -1,0 +1,7 @@
+- name: Restart ClickHouse container
+  become: true
+  when: clickhouse.enabled | bool
+  community.docker.docker_container:
+    name: "{{ clickhouse.container_name }}"
+    state: started
+    restart: true

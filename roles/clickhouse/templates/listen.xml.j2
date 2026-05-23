@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<!-- Managed by Ansible (roles/clickhouse). Do not edit by hand. -->
+<clickhouse>
+    <listen_host>{{ clickhouse.listen_host | default('0.0.0.0') }}</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+{% if (clickhouse.max_server_memory_usage | default(0) | int) > 0 %}
+    <max_server_memory_usage>{{ clickhouse.max_server_memory_usage | int }}</max_server_memory_usage>
+{% endif %}
+</clickhouse>
