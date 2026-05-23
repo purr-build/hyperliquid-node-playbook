@@ -76,6 +76,33 @@ The installed script accepts the same `edge_sync` structure from a rendered conf
 
 Use `--dry-run` to print the rsync itemized changes and remote files that would be deleted without applying them. Use `--list-changes` during a real run if you want rsync itemized output in the service logs.
 
+### `clickhouse`
+
+`clickhouse` is disabled by default. It runs a ClickHouse server in Docker, published only on the loopback interface so it is never reachable over the external network. Enable and configure it from `vars.local.yml`:
+
+```yaml
+clickhouse:
+  enabled: true
+  image: clickhouse/clickhouse-server:24.8
+  # Published only on this host interface. Keep it on loopback (or a private
+  # address) so ClickHouse is not exposed externally.
+  bind_host: 127.0.0.1
+  http_port: 8123
+  native_port: 9000
+  data_dir: /var/lib/clickhouse-docker
+  user: default
+  password: "change-me"
+  db: default
+  memory_limit: "4g"          # Docker container memory cap; "0" disables it
+  max_server_memory_usage: 0  # ClickHouse soft memory limit in bytes; 0 disables it
+```
+
+The role installs Docker (via `geerlingguy.docker`), persists data under `data_dir`, renders ClickHouse config into `config_dir`, and starts the container. Ports are published as `{{ bind_host }}:{{ http_port }}:8123` and `{{ bind_host }}:{{ native_port }}:9000`, and the `base` role does not open these ports in the firewall, so access stays local to the node. To reach it from your workstation, tunnel over SSH:
+
+```bash
+ssh -L 8123:127.0.0.1:8123 user@node
+```
+
 ## Roles
 
 Run a specific role by selecting its playbook:
@@ -104,6 +131,10 @@ Installs a cron job to prune old node data. Configure the path, schedule, and re
 
 Installs `/usr/local/bin/hl-edge-sync.py`, writes `/etc/hl-edge-sync.yml`, configures systemd service/timer units, and syncs configured public data paths to mirror hosts.
 
+### `clickhouse`
+
+Runs a ClickHouse server in Docker, bound to the loopback interface only. Configure the image, ports, credentials, and resource limits with `clickhouse`.
+
 ## Usage
 
 Run the full node playbook:
@@ -118,6 +149,7 @@ Run only one role:
 ansible-playbook playbooks/node.yml -i hosts.yml
 ansible-playbook playbooks/pruner.yml -i hosts.yml
 ansible-playbook playbooks/edge-sync.yml -i hosts.yml
+ansible-playbook playbooks/clickhouse.yml -i hosts.yml
 ```
 
 ## Roadmap

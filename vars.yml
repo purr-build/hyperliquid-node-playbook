@@ -61,3 +61,23 @@ edge_sync:
   timer_accuracy_sec: 30s
   timeout_start_sec: 30min
   run_on_deploy: false
+
+clickhouse:
+  enabled: false
+  image: clickhouse/clickhouse-server:24.8
+  container_name: clickhouse
+  restart_policy: unless-stopped
+  # Host interface the container ports are published on. Loopback only by
+  # default so ClickHouse is never reachable over the external network.
+  bind_host: 127.0.0.1
+  http_port: 8123
+  native_port: 9000
+  listen_host: 0.0.0.0
+  data_dir: /var/lib/clickhouse-docker
+  config_dir: /etc/clickhouse-docker
+  user: default
+  password: ""
+  db: default
+  max_server_memory_usage: 0
+  memory_limit: "0"
+  ulimit_nofile: 262144

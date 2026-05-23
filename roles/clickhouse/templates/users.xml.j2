@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Managed by Ansible (roles/clickhouse). Do not edit by hand. -->
+<clickhouse>
+    <users>
+        <{{ clickhouse.user }}>
+            <password>{{ clickhouse.password }}</password>
+            <!-- Restricted to private/loopback ranges; the container ports are
+                 only published on {{ clickhouse.bind_host | default('127.0.0.1') }}. -->
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+                <ip>10.0.0.0/8</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>192.168.0.0/16</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </{{ clickhouse.user }}>
+    </users>
+</clickhouse>
