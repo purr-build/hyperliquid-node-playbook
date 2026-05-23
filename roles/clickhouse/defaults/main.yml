@@ -1,6 +1,6 @@
 clickhouse:
   enabled: false
-  image: clickhouse/clickhouse-server:24.8
+  image: clickhouse/clickhouse-server:26.8
   container_name: clickhouse
   restart_policy: unless-stopped
   # Host interface the container ports are published on. Loopback only by
