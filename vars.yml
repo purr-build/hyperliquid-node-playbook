@@ -173,38 +173,15 @@ monitoring:
       - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
     published_ports: []
 
-nginx:
+caddy:
   enabled: false
-  package_name: nginx
-  service_name: nginx
-  remove_default_site: true
-  sites_available_dir: /etc/nginx/sites-available
-  sites_enabled_dir: /etc/nginx/sites-enabled
+  package_name: caddy
+  service_name: caddy
+  config_path: /etc/caddy/Caddyfile
 
   monitoring:
-    enabled: true
-    site_name: monitoring
-    listen_port: 80
-    listen_ipv6: false
-    server_name: "_"
-    client_max_body_size: 20m
-    access_log: /var/log/nginx/monitoring-access.log
-    error_log: /var/log/nginx/monitoring-error.log
-    # Set both values to enable nginx basic auth.
-    auth_basic: ""
-    auth_basic_user_file: ""
-    extra_server_directives: []
-
     grafana:
       enabled: true
-      path: /grafana/
+      # Set to the public hostname for Grafana (e.g. grafana.example.com).
+      domain: ""
       proxy_pass: http://127.0.0.1:3000
-      websocket: true
-      extra_location_directives: []
-
-    prometheus:
-      enabled: true
-      path: /prometheus/
-      proxy_pass: http://127.0.0.1:9090/
-      websocket: false
-      extra_location_directives: []

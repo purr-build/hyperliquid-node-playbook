@@ -1,0 +1,5 @@
+{% if caddy.monitoring.grafana.enabled | bool and caddy.monitoring.grafana.domain %}
+{{ caddy.monitoring.grafana.domain }} {
+	reverse_proxy {{ caddy.monitoring.grafana.proxy_pass }}
+}
+{% endif %}

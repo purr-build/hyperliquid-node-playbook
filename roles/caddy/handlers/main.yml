@@ -1,6 +1,6 @@
 ---
-- name: Reload nginx
+- name: Reload caddy
   become: true
   ansible.builtin.service:
-    name: "{{ nginx.service_name }}"
+    name: "{{ caddy.service_name }}"
     state: reloaded

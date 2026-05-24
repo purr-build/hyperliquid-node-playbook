@@ -10,4 +10,4 @@
             - "{{ playbook_dir }}/../vars.local.yml"
           skip: true
   roles:
-    - ../roles/nginx
+    - ../roles/caddy

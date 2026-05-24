@@ -1,0 +1,56 @@
+---
+- name: Merge caddy settings onto defaults
+  ansible.builtin.set_fact:
+    caddy: "{{ caddy_defaults | combine(caddy | default({}), recursive=True) }}"
+
+- name: Fetch Caddy GPG key
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+    dest: /tmp/caddy-gpg.key
+    mode: "0644"
+
+- name: Dearmor Caddy GPG key
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.command:
+    cmd: gpg --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg /tmp/caddy-gpg.key
+    creates: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+- name: Add Caddy apt repository
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.copy:
+    content: "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main\n"
+    dest: /etc/apt/sources.list.d/caddy-stable.list
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install caddy
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.apt:
+    name: "{{ caddy.package_name }}"
+    state: present
+    update_cache: true
+
+- name: Render Caddyfile
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ caddy.config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload caddy
+
+- name: Enable and start caddy
+  become: true
+  when: caddy.enabled | bool
+  ansible.builtin.service:
+    name: "{{ caddy.service_name }}"
+    enabled: true
+    state: started
