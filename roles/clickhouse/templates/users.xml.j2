@@ -2,8 +2,11 @@
 <!-- Managed by Ansible (roles/clickhouse). Do not edit by hand. -->
 <clickhouse>
     <users>
+{% if clickhouse.user != 'default' %}
+        <default remove="remove" />
+{% endif %}
         <{{ clickhouse.user }}>
-            <password>{{ clickhouse.password }}</password>
+            <password>{{ clickhouse.password | e }}</password>
             <!-- Restricted to private/loopback ranges; the container ports are
                  only published on {{ clickhouse.bind_host | default('127.0.0.1') }}. -->
             <networks>

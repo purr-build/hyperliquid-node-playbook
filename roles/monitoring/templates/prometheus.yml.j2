@@ -16,6 +16,17 @@ scrape_configs:
         labels:
           instance: {{ inventory_hostname | to_json }}
 {% endif %}
+{% set clickhouse_config = clickhouse | default({}) %}
+{% set clickhouse_metrics = clickhouse_config.metrics | default({}) %}
+{% if (clickhouse_config.enabled | default(false) | bool) and (clickhouse_metrics.enabled | default(true) | bool) and (clickhouse_metrics.scrape | default(true) | bool) %}
+  - job_name: {{ clickhouse_metrics.job_name | default('clickhouse') | to_json }}
+    metrics_path: {{ clickhouse_metrics.endpoint | default('/metrics') | to_json }}
+    static_configs:
+      - targets:
+          - {{ ((clickhouse_config.container_name | default('clickhouse')) ~ ':' ~ (clickhouse_metrics.port | default(9363) | string)) | to_json }}
+        labels:
+          instance: {{ inventory_hostname | to_json }}
+{% endif %}
 {% if monitoring.prometheus.extra_scrape_configs | length > 0 %}
 {{ monitoring.prometheus.extra_scrape_configs | to_nice_yaml(indent=2) | indent(2, true) }}
 {% endif %}

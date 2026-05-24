@@ -78,9 +78,22 @@ clickhouse:
   user: default
   password: ""
   db: default
+  create_database: true
   max_server_memory_usage: 0
   memory_limit: "0"
   ulimit_nofile: 262144
+  metrics:
+    enabled: true
+    endpoint: /metrics
+    port: 9363
+    include_metrics: true
+    include_events: true
+    include_asynchronous_metrics: true
+    scrape: true
+    job_name: clickhouse
+    # Defaults to monitoring.docker_network.
+    docker_network: "{{ monitoring.docker_network | default('monitoring') }}"
+    docker_network_driver: bridge
 
 monitoring:
   enabled: false

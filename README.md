@@ -95,9 +95,14 @@ clickhouse:
   db: default
   memory_limit: "4g"          # Docker container memory cap; "0" disables it
   max_server_memory_usage: 0  # ClickHouse soft memory limit in bytes; 0 disables it
+  metrics:
+    enabled: true
+    port: 9363
+    endpoint: /metrics
+    scrape: true
 ```
 
-The role installs Docker (via `geerlingguy.docker`), persists data under `data_dir`, renders ClickHouse config into `config_dir`, and starts the container. Ports are published as `{{ bind_host }}:{{ http_port }}:8123` and `{{ bind_host }}:{{ native_port }}:9000`, and the `base` role does not open these ports in the firewall, so access stays local to the node. To reach it from your workstation, tunnel over SSH:
+The role installs Docker (via `geerlingguy.docker`), persists data under `data_dir`, renders ClickHouse config into `config_dir`, and starts the container. Ports are published as `{{ bind_host }}:{{ http_port }}:8123` and `{{ bind_host }}:{{ native_port }}:9000`, and the `base` role does not open these ports in the firewall, so access stays local to the node. User/password config is rendered into `users.d`; the role does not pass `CLICKHOUSE_*` environment variables to the container entrypoint. It creates `clickhouse.db` after startup with `clickhouse-client`. ClickHouse Prometheus metrics are enabled on the container-only `metrics.port` and the container is attached to `metrics.docker_network` for Prometheus scraping. To reach ClickHouse from your workstation, tunnel over SSH:
 
 ```bash
 ssh -L 8123:127.0.0.1:8123 user@node
@@ -128,7 +133,7 @@ monitoring:
     enabled: true
 ```
 
-The role installs Docker, creates a `monitoring` Docker network, renders `/etc/prometheus-docker/prometheus.yml`, provisions Grafana's Prometheus datasource, and installs a starter node dashboard. Add Prometheus jobs with `monitoring.prometheus.extra_scrape_configs`. The Prometheus container maps `host.docker.internal` to Docker's host gateway by default.
+The role installs Docker, creates a `monitoring` Docker network, renders `/etc/prometheus-docker/prometheus.yml`, provisions Grafana's Prometheus datasource, and installs a starter node dashboard. Add Prometheus jobs with `monitoring.prometheus.extra_scrape_configs`. The Prometheus container maps `host.docker.internal` to Docker's host gateway by default. If `clickhouse.enabled` and `clickhouse.metrics.scrape` are true, Prometheus also scrapes `clickhouse:9363` on the monitoring Docker network.
 
 ### `nginx`
 

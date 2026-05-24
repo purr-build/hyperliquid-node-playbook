@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- Managed by Ansible (roles/clickhouse). Do not edit by hand. -->
+<clickhouse>
+    <prometheus>
+        <endpoint>{{ clickhouse.metrics.endpoint }}</endpoint>
+        <port>{{ clickhouse.metrics.port | int }}</port>
+        <metrics>{{ clickhouse.metrics.include_metrics | bool | ternary('true', 'false') }}</metrics>
+        <events>{{ clickhouse.metrics.include_events | bool | ternary('true', 'false') }}</events>
+        <asynchronous_metrics>{{ clickhouse.metrics.include_asynchronous_metrics | bool | ternary('true', 'false') }}</asynchronous_metrics>
+    </prometheus>
+</clickhouse>
