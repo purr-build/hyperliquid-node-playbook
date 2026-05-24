@@ -1,0 +1,13 @@
+# Base defaults. The role merges any `caddy` overrides (from vars.yml or
+# vars.local.yml) onto these, so a partial override block is enough.
+caddy_defaults:
+  enabled: false
+  package_name: caddy
+  service_name: caddy
+  config_path: /etc/caddy/Caddyfile
+
+  monitoring:
+    grafana:
+      enabled: true
+      domain: ""
+      proxy_pass: http://127.0.0.1:3000

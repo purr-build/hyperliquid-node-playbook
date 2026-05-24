@@ -1,6 +1,6 @@
 - name: Merge ClickHouse settings onto defaults
   ansible.builtin.set_fact:
-    clickhouse: "{{ clickhouse_defaults | combine(clickhouse | default({})) }}"
+    clickhouse: "{{ clickhouse_defaults | combine(clickhouse | default({}), recursive=True) }}"
 
 - name: Ensure Docker is installed
   when: clickhouse.enabled | bool
@@ -15,6 +15,17 @@
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+- name: Create ClickHouse monitoring Docker network
+  become: true
+  when:
+    - clickhouse.enabled | bool
+    - clickhouse.metrics.enabled | bool
+    - clickhouse.metrics.docker_network | string | length > 0
+  community.docker.docker_network:
+    name: "{{ clickhouse.metrics.docker_network }}"
+    driver: "{{ clickhouse.metrics.docker_network_driver }}"
+    state: present
 
 - name: Create ClickHouse data directory
   become: true
@@ -61,6 +72,45 @@
     mode: "0640"
   notify: Restart ClickHouse container
 
+- name: Render ClickHouse Prometheus metrics config
+  become: true
+  when:
+    - clickhouse.enabled | bool
+    - clickhouse.metrics.enabled | bool
+  ansible.builtin.template:
+    src: prometheus.xml.j2
+    dest: "{{ clickhouse.config_dir }}/config.d/prometheus.xml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ClickHouse container
+
+- name: Remove ClickHouse Prometheus metrics config when disabled
+  become: true
+  when:
+    - clickhouse.enabled | bool
+    - not (clickhouse.metrics.enabled | bool)
+  ansible.builtin.file:
+    path: "{{ clickhouse.config_dir }}/config.d/prometheus.xml"
+    state: absent
+  notify: Restart ClickHouse container
+
+- name: Build ClickHouse Docker network list
+  when: clickhouse.enabled | bool
+  ansible.builtin.set_fact:
+    clickhouse_docker_networks: >-
+      {{ [{'name': clickhouse.metrics.docker_network}] if (clickhouse.metrics.enabled | bool and clickhouse.metrics.docker_network | string | length > 0) else [] }}
+
+- name: Build ClickHouse client arguments
+  no_log: "{{ clickhouse.password | string | length > 0 }}"
+  when: clickhouse.enabled | bool
+  ansible.builtin.set_fact:
+    clickhouse_client_argv: >-
+      {{
+        ['clickhouse-client', '--host', '127.0.0.1', '--port', '9000', '--user', (clickhouse.user | string)]
+        + ([ '--password=' ~ (clickhouse.password | string) ] if (clickhouse.password | string | length > 0) else [])
+      }}
+
 - name: Run ClickHouse container
   become: true
   when: clickhouse.enabled | bool
@@ -74,10 +124,10 @@
     published_ports:
       - "{{ clickhouse.bind_host }}:{{ clickhouse.http_port }}:8123"
       - "{{ clickhouse.bind_host }}:{{ clickhouse.native_port }}:9000"
-    env:
-      CLICKHOUSE_DB: "{{ clickhouse.db | string }}"
-      CLICKHOUSE_USER: "{{ clickhouse.user | string }}"
-      CLICKHOUSE_PASSWORD: "{{ clickhouse.password | string }}"
+    # User, password, and database are managed by rendered config and post-start SQL.
+    # Do not pass CLICKHOUSE_* env vars; the official image entrypoint writes
+    # users.d/default-user.xml when they are set, which conflicts with read-only config mounts.
+    env: {}
     volumes:
       - "{{ clickhouse.data_dir }}:/var/lib/clickhouse"
       - "{{ clickhouse.config_dir }}/config.d:/etc/clickhouse-server/config.d:ro"
@@ -85,5 +135,32 @@
     ulimits:
       - "nofile:{{ clickhouse.ulimit_nofile }}:{{ clickhouse.ulimit_nofile }}"
     memory: "{{ clickhouse.memory_limit | default('0') }}"
+    networks: "{{ clickhouse_docker_networks if (clickhouse_docker_networks | default([]) | length > 0) else omit }}"
+    networks_cli_compatible: "{{ true if (clickhouse_docker_networks | default([]) | length > 0) else omit }}"
     comparisons:
       '*': strict
+
+- name: Wait for ClickHouse to accept client connections
+  become: true
+  no_log: "{{ clickhouse.password | string | length > 0 }}"
+  when: clickhouse.enabled | bool
+  community.docker.docker_container_exec:
+    container: "{{ clickhouse.container_name }}"
+    argv: "{{ clickhouse_client_argv + ['--query', 'SELECT 1'] }}"
+  register: clickhouse_ping
+  retries: 30
+  delay: 2
+  until: clickhouse_ping.rc == 0
+  changed_when: false
+
+- name: Create ClickHouse database
+  become: true
+  no_log: "{{ clickhouse.password | string | length > 0 }}"
+  when:
+    - clickhouse.enabled | bool
+    - clickhouse.create_database | bool
+    - clickhouse.db | string | length > 0
+  community.docker.docker_container_exec:
+    container: "{{ clickhouse.container_name }}"
+    argv: "{{ clickhouse_client_argv + ['--query', 'CREATE DATABASE IF NOT EXISTS `' ~ (clickhouse.db | string | replace('`', '``')) ~ '`'] }}"
+  changed_when: false

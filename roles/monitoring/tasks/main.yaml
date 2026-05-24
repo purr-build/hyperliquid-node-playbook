@@ -1,0 +1,238 @@
+---
+- name: Merge monitoring settings onto defaults
+  ansible.builtin.set_fact:
+    monitoring: "{{ monitoring_defaults | combine(monitoring | default({}), recursive=True) }}"
+
+- name: Ensure Docker is installed
+  when: monitoring.enabled | bool
+  ansible.builtin.include_role:
+    name: geerlingguy.docker
+
+- name: Install Docker SDK for Python
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.apt:
+    name: python3-docker
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create monitoring Docker network
+  become: true
+  when: monitoring.enabled | bool
+  community.docker.docker_network:
+    name: "{{ monitoring.docker_network }}"
+    driver: "{{ monitoring.docker_network_driver }}"
+    state: present
+
+- name: Create Prometheus config directory
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.file:
+    path: "{{ monitoring.prometheus.config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create Prometheus data directory
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.file:
+    path: "{{ monitoring.prometheus.data_dir }}"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    mode: "0750"
+
+- name: Create Grafana directories
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ monitoring.grafana.data_dir }}"
+      owner: "472"
+      group: "472"
+      mode: "0750"
+    - path: "{{ monitoring.grafana.provisioning_dir }}/datasources"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ monitoring.grafana.provisioning_dir }}/dashboards"
+      owner: root
+      group: root
+      mode: "0755"
+    - path: "{{ monitoring.grafana.provisioning_dir }}/dashboard-files"
+      owner: root
+      group: root
+      mode: "0755"
+
+- name: Render Prometheus configuration
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring.prometheus.config_dir }}/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Prometheus container
+
+- name: Render Grafana Prometheus datasource
+  become: true
+  when: monitoring.enabled | bool
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: "{{ monitoring.grafana.provisioning_dir }}/datasources/prometheus.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Grafana container
+
+- name: Render Grafana dashboard provider
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - monitoring.grafana.dashboards.enabled | bool
+  ansible.builtin.template:
+    src: grafana-dashboard-provider.yml.j2
+    dest: "{{ monitoring.grafana.provisioning_dir }}/dashboards/node.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Grafana container
+
+- name: Render Grafana node overview dashboard
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - monitoring.grafana.dashboards.enabled | bool
+    - monitoring.grafana.dashboards.default_node_dashboard | bool
+  ansible.builtin.template:
+    src: node-overview.json.j2
+    dest: "{{ monitoring.grafana.provisioning_dir }}/dashboard-files/node-overview.json"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Grafana container
+
+- name: Remove Grafana dashboard provider when disabled
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - not (monitoring.grafana.dashboards.enabled | bool)
+  ansible.builtin.file:
+    path: "{{ monitoring.grafana.provisioning_dir }}/dashboards/node.yml"
+    state: absent
+  notify: Restart Grafana container
+
+- name: Remove Grafana node overview dashboard when disabled
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - not (monitoring.grafana.dashboards.enabled | bool) or not (monitoring.grafana.dashboards.default_node_dashboard | bool)
+  ansible.builtin.file:
+    path: "{{ monitoring.grafana.provisioning_dir }}/dashboard-files/node-overview.json"
+    state: absent
+  notify: Restart Grafana container
+
+- name: Build Prometheus container arguments
+  when: monitoring.enabled | bool
+  ansible.builtin.set_fact:
+    monitoring_prometheus_command: >-
+      {{
+        monitoring.prometheus.command
+        + ([ '--storage.tsdb.retention.time=' ~ monitoring.prometheus.retention_time ] if (monitoring.prometheus.retention_time | string | length > 0) else [])
+        + ([ '--storage.tsdb.retention.size=' ~ monitoring.prometheus.retention_size ] if (monitoring.prometheus.retention_size | string | length > 0) else [])
+        + ([ '--web.external-url=' ~ monitoring.prometheus.external_url ] if (monitoring.prometheus.external_url | string | length > 0) else [])
+        + ([ '--web.route-prefix=' ~ monitoring.prometheus.route_prefix ] if (monitoring.prometheus.route_prefix | string | length > 0) else [])
+        + monitoring.prometheus.extra_args
+      }}
+    monitoring_prometheus_published_ports: >-
+      {{ [monitoring.prometheus.bind_host ~ ':' ~ monitoring.prometheus.port ~ ':9090'] if (monitoring.prometheus.publish | bool) else [] }}
+    monitoring_grafana_published_ports: >-
+      {{ [monitoring.grafana.bind_host ~ ':' ~ monitoring.grafana.port ~ ':3000'] if (monitoring.grafana.publish | bool) else [] }}
+
+- name: Run node exporter container
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - monitoring.node_exporter.enabled | bool
+  community.docker.docker_container:
+    name: "{{ monitoring.node_exporter.container_name }}"
+    image: "{{ monitoring.node_exporter.image }}"
+    state: started
+    restart_policy: "{{ monitoring.node_exporter.restart_policy }}"
+    pid_mode: host
+    read_only: true
+    command: "{{ monitoring.node_exporter.command }}"
+    published_ports: "{{ monitoring.node_exporter.published_ports }}"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - name: "{{ monitoring.docker_network }}"
+    networks_cli_compatible: true
+    comparisons:
+      '*': strict
+
+- name: Remove node exporter container when disabled
+  become: true
+  when:
+    - monitoring.enabled | bool
+    - not (monitoring.node_exporter.enabled | bool)
+  community.docker.docker_container:
+    name: "{{ monitoring.node_exporter.container_name }}"
+    state: absent
+
+- name: Run Prometheus container
+  become: true
+  when: monitoring.enabled | bool
+  community.docker.docker_container:
+    name: "{{ monitoring.prometheus.container_name }}"
+    image: "{{ monitoring.prometheus.image }}"
+    state: started
+    restart_policy: "{{ monitoring.prometheus.restart_policy }}"
+    command: "{{ monitoring_prometheus_command }}"
+    published_ports: "{{ monitoring_prometheus_published_ports }}"
+    etc_hosts: "{{ monitoring.prometheus.etc_hosts }}"
+    volumes:
+      - "{{ monitoring.prometheus.config_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "{{ monitoring.prometheus.data_dir }}:/prometheus"
+    networks:
+      - name: "{{ monitoring.docker_network }}"
+    networks_cli_compatible: true
+    comparisons:
+      '*': strict
+
+- name: Run Grafana container
+  become: true
+  no_log: "{{ monitoring.grafana.hide_secrets | bool }}"
+  when: monitoring.enabled | bool
+  community.docker.docker_container:
+    name: "{{ monitoring.grafana.container_name }}"
+    image: "{{ monitoring.grafana.image }}"
+    state: started
+    restart_policy: "{{ monitoring.grafana.restart_policy }}"
+    published_ports: "{{ monitoring_grafana_published_ports }}"
+    env:
+      GF_SECURITY_ADMIN_USER: "{{ monitoring.grafana.admin_user | string }}"
+      GF_SECURITY_ADMIN_PASSWORD: "{{ monitoring.grafana.admin_password | string }}"
+      GF_USERS_ALLOW_SIGN_UP: "{{ monitoring.grafana.allow_sign_up | bool | ternary('true', 'false') }}"
+      GF_AUTH_ANONYMOUS_ENABLED: "{{ monitoring.grafana.anonymous_enabled | bool | ternary('true', 'false') }}"
+      GF_SERVER_DOMAIN: "{{ monitoring.grafana.domain | string }}"
+      GF_SERVER_ROOT_URL: "{{ monitoring.grafana.root_url | string }}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "{{ monitoring.grafana.serve_from_sub_path | bool | ternary('true', 'false') }}"
+      GF_INSTALL_PLUGINS: "{{ monitoring.grafana.install_plugins | join(',') }}"
+    volumes:
+      - "{{ monitoring.grafana.data_dir }}:/var/lib/grafana"
+      - "{{ monitoring.grafana.provisioning_dir }}:/etc/grafana/provisioning:ro"
+    networks:
+      - name: "{{ monitoring.docker_network }}"
+    networks_cli_compatible: true
+    comparisons:
+      '*': strict
