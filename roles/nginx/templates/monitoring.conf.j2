@@ -1,0 +1,77 @@
+server {
+    listen {{ nginx.monitoring.listen_port }};
+{% if nginx.monitoring.listen_ipv6 | bool %}
+    listen [::]:{{ nginx.monitoring.listen_port }};
+{% endif %}
+    server_name {{ nginx.monitoring.server_name }};
+
+    client_max_body_size {{ nginx.monitoring.client_max_body_size }};
+    access_log {{ nginx.monitoring.access_log }};
+    error_log {{ nginx.monitoring.error_log }};
+
+{% if nginx.monitoring.auth_basic | length > 0 and nginx.monitoring.auth_basic_user_file | length > 0 %}
+    auth_basic {{ nginx.monitoring.auth_basic | to_json }};
+    auth_basic_user_file {{ nginx.monitoring.auth_basic_user_file }};
+{% endif %}
+{% for directive in nginx.monitoring.extra_server_directives %}
+    {{ directive }}
+{% endfor %}
+
+{% if nginx.monitoring.grafana.enabled | bool %}
+    location = / {
+        return 302 {{ nginx.monitoring.grafana.path }};
+    }
+
+    location = {{ nginx.monitoring.grafana.path | regex_replace('/$', '') }} {
+        return 301 {{ nginx.monitoring.grafana.path }};
+    }
+
+    location {{ nginx.monitoring.grafana.path }} {
+        proxy_pass {{ nginx.monitoring.grafana.proxy_pass }};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+{% if nginx.monitoring.grafana.websocket | bool %}
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+{% endif %}
+{% for directive in nginx.monitoring.grafana.extra_location_directives %}
+        {{ directive }}
+{% endfor %}
+    }
+{% endif %}
+
+{% if nginx.monitoring.prometheus.enabled | bool %}
+{% if not (nginx.monitoring.grafana.enabled | bool) %}
+    location = / {
+        return 302 {{ nginx.monitoring.prometheus.path }};
+    }
+{% endif %}
+
+    location = {{ nginx.monitoring.prometheus.path | regex_replace('/$', '') }} {
+        return 301 {{ nginx.monitoring.prometheus.path }};
+    }
+
+    location {{ nginx.monitoring.prometheus.path }} {
+        proxy_pass {{ nginx.monitoring.prometheus.proxy_pass }};
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+{% if nginx.monitoring.prometheus.websocket | bool %}
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+{% endif %}
+{% for directive in nginx.monitoring.prometheus.extra_location_directives %}
+        {{ directive }}
+{% endfor %}
+    }
+{% endif %}
+}

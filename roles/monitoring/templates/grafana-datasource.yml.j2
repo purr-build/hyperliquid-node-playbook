@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: {{ monitoring.grafana.datasource.name | to_json }}
+    uid: {{ monitoring.grafana.datasource.uid | to_json }}
+    type: prometheus
+    access: proxy
+    url: {{ monitoring.grafana.datasource.url | to_json }}
+    isDefault: {{ monitoring.grafana.datasource.is_default | bool | ternary('true', 'false') }}
+    editable: true

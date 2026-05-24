@@ -1,0 +1,36 @@
+# Base defaults. The role merges any `nginx` overrides (from vars.yml or
+# vars.local.yml) onto these, so a partial override block is enough.
+nginx_defaults:
+  enabled: false
+  package_name: nginx
+  service_name: nginx
+  remove_default_site: true
+  sites_available_dir: /etc/nginx/sites-available
+  sites_enabled_dir: /etc/nginx/sites-enabled
+
+  monitoring:
+    enabled: true
+    site_name: monitoring
+    listen_port: 80
+    listen_ipv6: false
+    server_name: "_"
+    client_max_body_size: 20m
+    access_log: /var/log/nginx/monitoring-access.log
+    error_log: /var/log/nginx/monitoring-error.log
+    auth_basic: ""
+    auth_basic_user_file: ""
+    extra_server_directives: []
+
+    grafana:
+      enabled: true
+      path: /grafana/
+      proxy_pass: http://127.0.0.1:3000
+      websocket: true
+      extra_location_directives: []
+
+    prometheus:
+      enabled: true
+      path: /prometheus/
+      proxy_pass: http://127.0.0.1:9090/
+      websocket: false
+      extra_location_directives: []

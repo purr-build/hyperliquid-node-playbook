@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: {{ monitoring.grafana.dashboards.provider_name | to_json }}
+    orgId: 1
+    folder: {{ monitoring.grafana.dashboards.folder | to_json }}
+    type: file
+    disableDeletion: false
+    editable: {{ monitoring.grafana.dashboards.allow_ui_updates | bool | ternary('true', 'false') }}
+    options:
+      path: /etc/grafana/provisioning/dashboard-files

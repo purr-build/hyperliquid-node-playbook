@@ -81,3 +81,117 @@ clickhouse:
   max_server_memory_usage: 0
   memory_limit: "0"
   ulimit_nofile: 262144
+
+monitoring:
+  enabled: false
+  docker_network: monitoring
+  docker_network_driver: bridge
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart_policy: unless-stopped
+    publish: true
+    # Published only on loopback by default. Use nginx or an SSH tunnel for access.
+    bind_host: 127.0.0.1
+    port: 9090
+    # Lets Prometheus scrape host services as host.docker.internal:<port>.
+    etc_hosts:
+      host.docker.internal: host-gateway
+    config_dir: /etc/prometheus-docker
+    data_dir: /var/lib/prometheus-docker
+    retention_time: 15d
+    retention_size: ""
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    # Compatible with the nginx role's /prometheus/ path proxy.
+    external_url: /prometheus/
+    route_prefix: /
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+    extra_args: []
+    extra_scrape_configs: []
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    restart_policy: unless-stopped
+    publish: true
+    # Published only on loopback by default. Use nginx or an SSH tunnel for access.
+    bind_host: 127.0.0.1
+    port: 3000
+    data_dir: /var/lib/grafana-docker
+    provisioning_dir: /etc/grafana-docker/provisioning
+    admin_user: admin
+    # Override before exposing Grafana.
+    admin_password: admin
+    allow_sign_up: false
+    anonymous_enabled: false
+    # Set to the public hostname used by nginx.
+    domain: localhost
+    # Compatible with the nginx role's /grafana/ path proxy.
+    root_url: "%(protocol)s://%(domain)s/grafana/"
+    serve_from_sub_path: true
+    install_plugins: []
+    hide_secrets: true
+    datasource:
+      name: Prometheus
+      uid: prometheus
+      url: http://prometheus:9090
+      is_default: true
+    dashboards:
+      enabled: true
+      provider_name: Node
+      folder: ""
+      allow_ui_updates: true
+      default_node_dashboard: true
+
+  node_exporter:
+    enabled: true
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    restart_policy: unless-stopped
+    job_name: node
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+    published_ports: []
+
+nginx:
+  enabled: false
+  package_name: nginx
+  service_name: nginx
+  remove_default_site: true
+  sites_available_dir: /etc/nginx/sites-available
+  sites_enabled_dir: /etc/nginx/sites-enabled
+
+  monitoring:
+    enabled: true
+    site_name: monitoring
+    listen_port: 80
+    listen_ipv6: false
+    server_name: "_"
+    client_max_body_size: 20m
+    access_log: /var/log/nginx/monitoring-access.log
+    error_log: /var/log/nginx/monitoring-error.log
+    # Set both values to enable nginx basic auth.
+    auth_basic: ""
+    auth_basic_user_file: ""
+    extra_server_directives: []
+
+    grafana:
+      enabled: true
+      path: /grafana/
+      proxy_pass: http://127.0.0.1:3000
+      websocket: true
+      extra_location_directives: []
+
+    prometheus:
+      enabled: true
+      path: /prometheus/
+      proxy_pass: http://127.0.0.1:9090/
+      websocket: false
+      extra_location_directives: []

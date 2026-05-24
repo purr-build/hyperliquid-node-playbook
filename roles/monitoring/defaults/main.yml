@@ -1,0 +1,77 @@
+# Base defaults. The role merges any `monitoring` overrides (from vars.yml or
+# vars.local.yml) onto these, so a partial override block is enough.
+monitoring_defaults:
+  enabled: false
+  docker_network: monitoring
+  docker_network_driver: bridge
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart_policy: unless-stopped
+    publish: true
+    bind_host: 127.0.0.1
+    port: 9090
+    etc_hosts:
+      host.docker.internal: host-gateway
+    config_dir: /etc/prometheus-docker
+    data_dir: /var/lib/prometheus-docker
+    retention_time: 15d
+    retention_size: ""
+    scrape_interval: 15s
+    evaluation_interval: 15s
+    # Defaults are compatible with the nginx role's /prometheus/ path proxy.
+    # Set both to "" if you expose Prometheus at the root of its own host.
+    external_url: /prometheus/
+    route_prefix: /
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.listen-address=0.0.0.0:9090
+    extra_args: []
+    extra_scrape_configs: []
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    restart_policy: unless-stopped
+    publish: true
+    bind_host: 127.0.0.1
+    port: 3000
+    data_dir: /var/lib/grafana-docker
+    provisioning_dir: /etc/grafana-docker/provisioning
+    admin_user: admin
+    admin_password: admin
+    allow_sign_up: false
+    anonymous_enabled: false
+    domain: localhost
+    # Defaults are compatible with the nginx role's /grafana/ path proxy.
+    # For a dedicated grafana.example.com vhost, use "%(protocol)s://%(domain)s/"
+    # and set serve_from_sub_path to false.
+    root_url: "%(protocol)s://%(domain)s/grafana/"
+    serve_from_sub_path: true
+    install_plugins: []
+    hide_secrets: true
+    datasource:
+      name: Prometheus
+      uid: prometheus
+      url: http://prometheus:9090
+      is_default: true
+    dashboards:
+      enabled: true
+      provider_name: Node
+      folder: ""
+      allow_ui_updates: true
+      default_node_dashboard: true
+
+  node_exporter:
+    enabled: true
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    restart_policy: unless-stopped
+    job_name: node
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+    published_ports: []

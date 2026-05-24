@@ -1,0 +1,21 @@
+global:
+  scrape_interval: {{ monitoring.prometheus.scrape_interval }}
+  evaluation_interval: {{ monitoring.prometheus.evaluation_interval }}
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+{% if monitoring.node_exporter.enabled | bool %}
+  - job_name: {{ monitoring.node_exporter.job_name | to_json }}
+    static_configs:
+      - targets:
+          - {{ (monitoring.node_exporter.container_name ~ ':9100') | to_json }}
+        labels:
+          instance: {{ inventory_hostname | to_json }}
+{% endif %}
+{% if monitoring.prometheus.extra_scrape_configs | length > 0 %}
+{{ monitoring.prometheus.extra_scrape_configs | to_nice_yaml(indent=2) | indent(2, true) }}
+{% endif %}

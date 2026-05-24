@@ -103,6 +103,52 @@ The role installs Docker (via `geerlingguy.docker`), persists data under `data_d
 ssh -L 8123:127.0.0.1:8123 user@node
 ```
 
+### `monitoring`
+
+`monitoring` is disabled by default. It runs Prometheus, Grafana, and node_exporter in Docker. Prometheus and Grafana publish only on loopback by default; expose them through the `nginx` role or an SSH tunnel.
+
+```yaml
+monitoring:
+  enabled: true
+  prometheus:
+    bind_host: 127.0.0.1
+    port: 9090
+    retention_time: 15d
+    extra_scrape_configs:
+      - job_name: hl-node
+        static_configs:
+          - targets: ["host.docker.internal:8080"]
+  grafana:
+    bind_host: 127.0.0.1
+    port: 3000
+    domain: node.example.com
+    admin_user: admin
+    admin_password: "change-me"
+  node_exporter:
+    enabled: true
+```
+
+The role installs Docker, creates a `monitoring` Docker network, renders `/etc/prometheus-docker/prometheus.yml`, provisions Grafana's Prometheus datasource, and installs a starter node dashboard. Add Prometheus jobs with `monitoring.prometheus.extra_scrape_configs`. The Prometheus container maps `host.docker.internal` to Docker's host gateway by default.
+
+### `nginx`
+
+`nginx` is disabled by default. It installs nginx and creates one site that proxies `/grafana/` to Grafana and `/prometheus/` to Prometheus:
+
+```yaml
+nginx:
+  enabled: true
+  monitoring:
+    server_name: node.example.com
+    grafana:
+      path: /grafana/
+      proxy_pass: http://127.0.0.1:3000
+    prometheus:
+      path: /prometheus/
+      proxy_pass: http://127.0.0.1:9090/
+```
+
+The monitoring defaults already set Grafana and Prometheus for those subpaths; set `monitoring.grafana.domain` to the public host name. If you use separate virtual hosts instead, set `monitoring.grafana.root_url` to `%(protocol)s://%(domain)s/`, set `monitoring.grafana.serve_from_sub_path: false`, and clear `monitoring.prometheus.external_url` and `monitoring.prometheus.route_prefix`. Use `nginx.monitoring.auth_basic` with `auth_basic_user_file` if you want nginx basic auth.
+
 ## Roles
 
 Run a specific role by selecting its playbook:
@@ -135,6 +181,14 @@ Installs `/usr/local/bin/hl-edge-sync.py`, writes `/etc/hl-edge-sync.yml`, confi
 
 Runs a ClickHouse server in Docker, bound to the loopback interface only. Configure the image, ports, credentials, and resource limits with `clickhouse`.
 
+### `monitoring`
+
+Runs Prometheus, Grafana, and node_exporter in Docker with loopback-bound Prometheus and Grafana ports.
+
+### `nginx`
+
+Installs nginx and configures reverse proxies for Grafana and Prometheus.
+
 ## Usage
 
 Run the full node playbook:
@@ -150,13 +204,15 @@ ansible-playbook playbooks/node.yml -i hosts.yml
 ansible-playbook playbooks/pruner.yml -i hosts.yml
 ansible-playbook playbooks/edge-sync.yml -i hosts.yml
 ansible-playbook playbooks/clickhouse.yml -i hosts.yml
+ansible-playbook playbooks/monitoring.yml -i hosts.yml
+ansible-playbook playbooks/nginx.yml -i hosts.yml
 ```
 
 ## Roadmap
 
 - [x] Cron job to prune old data.
-- [ ] Nginx service to serve info endpoint.
-- [ ] Monitoring with Prometheus and Grafana.
+- [x] Nginx reverse proxy for Grafana and Prometheus.
+- [x] Monitoring with Prometheus and Grafana.
 
 ## License
 

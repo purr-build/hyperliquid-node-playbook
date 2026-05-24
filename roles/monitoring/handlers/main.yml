@@ -1,0 +1,16 @@
+---
+- name: Restart Prometheus container
+  become: true
+  when: monitoring.enabled | bool
+  community.docker.docker_container:
+    name: "{{ monitoring.prometheus.container_name }}"
+    state: started
+    restart: true
+
+- name: Restart Grafana container
+  become: true
+  when: monitoring.enabled | bool
+  community.docker.docker_container:
+    name: "{{ monitoring.grafana.container_name }}"
+    state: started
+    restart: true
