@@ -14,14 +14,12 @@ ansible-galaxy install -r requirements.yml
 
 ## Configuration
 
-`vars.yml` contains safe defaults that can be committed. Put machine-specific overrides in `vars.local.yml`; that file is ignored by Git.
+Check `vars.yml` for defaults. Put machine-specific overrides in `vars.local.yml`.
 
 ```bash
 cp hosts.example.yml hosts.yml
 cp vars.yml vars.local.yml
 ```
-
-Edit `hosts.yml` and `vars.local.yml` before running the playbooks.
 
 ### `gossip_config`
 
@@ -39,7 +37,7 @@ Set `download_peers: false` and provide `gossip_config.ip` if you want to pin a 
 
 ### `edge_sync`
 
-`edge_sync` is disabled by default. Enable it from `vars.local.yml` and configure one or more mirror targets:
+Sync specific paths to edge nodes. Disabled by default.
 
 ```yaml
 edge_sync:
@@ -65,20 +63,16 @@ edge_sync:
       delete: true
 ```
 
-Each sync item supports `type: directory` for a full directory sync and `type: latest_by_name` for copying only the newest matching file. When `latest_by_name` uses `date_subdir: true` with `delete: true`, cleanup removes older matching files from the destination root, not only from today's subdirectory.
-
-The installed script accepts the same `edge_sync` structure from a rendered config file or a full `vars.local.yml`-style file:
+Each sync item supports `type: directory` for a full directory sync and `type: latest_by_name` for copying only the newest matching file. When `latest_by_name` uses `date_subdir: true` with `delete: true`, cleanup removes older matching files from the destination root.
 
 ```bash
 /usr/local/bin/hl-edge-sync.py --config /etc/hl-edge-sync.yml --dry-run
 /usr/local/bin/hl-edge-sync.py --config vars.local.yml --plan
 ```
 
-Use `--dry-run` to print the rsync itemized changes and remote files that would be deleted without applying them. Use `--list-changes` during a real run if you want rsync itemized output in the service logs.
-
 ### `clickhouse`
 
-`clickhouse` is disabled by default. It runs a ClickHouse server in Docker, published only on the loopback interface so it is never reachable over the external network. Enable and configure it from `vars.local.yml`:
+`clickhouse` is disabled by default. It runs a ClickHouse server in Docker, published only on the loopback interface. To enable:
 
 ```yaml
 clickhouse:
@@ -102,15 +96,9 @@ clickhouse:
     scrape: true
 ```
 
-The role installs Docker (via `geerlingguy.docker`), persists data under `data_dir`, renders ClickHouse config into `config_dir`, and starts the container. Ports are published as `{{ bind_host }}:{{ http_port }}:8123` and `{{ bind_host }}:{{ native_port }}:9000`, and the `base` role does not open these ports in the firewall, so access stays local to the node. User/password config is rendered into `users.d`; the role does not pass `CLICKHOUSE_*` environment variables to the container entrypoint. It creates `clickhouse.db` after startup with `clickhouse-client`. ClickHouse Prometheus metrics are enabled on the container-only `metrics.port` and the container is attached to `metrics.docker_network` for Prometheus scraping. To reach ClickHouse from your workstation, tunnel over SSH:
-
-```bash
-ssh -L 8123:127.0.0.1:8123 user@node
-```
-
 ### `monitoring`
 
-`monitoring` is disabled by default. It runs Prometheus, Grafana, and node_exporter in Docker. Prometheus and Grafana publish only on loopback by default; expose them through the `nginx` role or an SSH tunnel.
+`monitoring` is disabled by default. It runs Prometheus, Grafana, and node_exporter in Docker.
 
 ```yaml
 monitoring:
@@ -133,26 +121,24 @@ monitoring:
     enabled: true
 ```
 
-The role installs Docker, creates a `monitoring` Docker network, renders `/etc/prometheus-docker/prometheus.yml`, provisions Grafana's Prometheus datasource, and installs a starter node dashboard. Add Prometheus jobs with `monitoring.prometheus.extra_scrape_configs`. The Prometheus container maps `host.docker.internal` to Docker's host gateway by default. If `clickhouse.enabled` and `clickhouse.metrics.scrape` are true, Prometheus also scrapes `clickhouse:9363` on the monitoring Docker network.
+### `caddy`
 
-### `nginx`
+Runs a local caddy server. Right now only used to serve Grafana.
 
-`nginx` is disabled by default. It installs nginx and creates one site that proxies `/grafana/` to Grafana and `/prometheus/` to Prometheus:
-
-```yaml
-nginx:
-  enabled: true
-  monitoring:
-    server_name: node.example.com
-    grafana:
-      path: /grafana/
-      proxy_pass: http://127.0.0.1:3000
-    prometheus:
-      path: /prometheus/
-      proxy_pass: http://127.0.0.1:9090/
 ```
+caddy:
+  enabled: false
+  package_name: caddy
+  service_name: caddy
+  config_path: /etc/caddy/Caddyfile
 
-The monitoring defaults already set Grafana and Prometheus for those subpaths; set `monitoring.grafana.domain` to the public host name. If you use separate virtual hosts instead, set `monitoring.grafana.root_url` to `%(protocol)s://%(domain)s/`, set `monitoring.grafana.serve_from_sub_path: false`, and clear `monitoring.prometheus.external_url` and `monitoring.prometheus.route_prefix`. Use `nginx.monitoring.auth_basic` with `auth_basic_user_file` if you want nginx basic auth.
+  monitoring:
+    grafana:
+      enabled: true
+      # Set to the public hostname for Grafana (e.g. grafana.example.com).
+      domain: ""
+      proxy_pass: http://127.0.0.1:3000
+```
 
 ## Roles
 
@@ -190,9 +176,9 @@ Runs a ClickHouse server in Docker, bound to the loopback interface only. Config
 
 Runs Prometheus, Grafana, and node_exporter in Docker with loopback-bound Prometheus and Grafana ports.
 
-### `nginx`
+### `caddy`
 
-Installs nginx and configures reverse proxies for Grafana and Prometheus.
+Runs local caddy server with HTTPS for Grafana.
 
 ## Usage
 
