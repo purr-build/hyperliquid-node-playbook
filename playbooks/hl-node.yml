@@ -10,11 +10,11 @@
             - "{{ playbook_dir }}/../vars.local.yml"
           skip: true
   roles:
-    - ../roles/base 
+    - ../roles/base
     - ../roles/users
     - ../roles/node
     - ../roles/pruner
     - ../roles/edge_sync
     - ../roles/clickhouse
     - ../roles/monitoring
-    - ../roles/nginx
+    - ../roles/caddy
